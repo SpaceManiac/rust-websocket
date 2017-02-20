@@ -8,8 +8,7 @@ pub use self::response::Response;
 
 use stream::WebSocketStream;
 
-use openssl::ssl::SslContext;
-use openssl::ssl::SslStream;
+use openssl::ssl::{Ssl, SslContext};
 
 pub mod request;
 pub mod response;
@@ -60,7 +59,7 @@ pub mod response;
 ///let _ = context.set_private_key_file(&(Path::new("key.pem")), X509FileType::PEM);
 ///let server = Server::bind_secure("127.0.0.1:1234", &context).unwrap();
 ///
-///for connection in server {
+///for connection in server {		//FIXME
 ///    // Spawn a new thread for each connection.
 ///    thread::spawn(move || {
 ///		   let request = connection.unwrap().read_request().unwrap(); // Get the request
@@ -114,7 +113,9 @@ impl<'a> Server<'a> {
 		let stream = try!(self.inner.accept()).0;
 		let wsstream = match self.context {
 			Some(context) => {
-				let sslstream = match SslStream::accept(context, stream) {
+				let ssl = try!(Ssl::new(context));
+
+				let sslstream = match ssl.accept(stream) {
 					Ok(s) => s,
 					Err(err) => {
 						return Err(io::Error::new(io::ErrorKind::Other, err));

@@ -5,7 +5,7 @@ use std::fmt::{self, Debug};
 use std::str::FromStr;
 use serialize::base64::{ToBase64, FromBase64, STANDARD};
 use header::WebSocketKey;
-use openssl::crypto::hash::{self, hash};
+use openssl::hash::{self, hash};
 use result::{WebSocketResult, WebSocketError};
 
 static MAGIC_GUID: &'static str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -54,7 +54,7 @@ impl WebSocketAccept {
 		let mut concat_key = String::with_capacity(serialized.len() + 36);
 		concat_key.push_str(&serialized[..]);
 		concat_key.push_str(MAGIC_GUID);
-		let output = hash(hash::Type::SHA1, concat_key.as_bytes());
+		let output = hash(hash::MessageDigest::sha1(), concat_key.as_bytes()).unwrap();
 		let mut iter = output.into_iter();
 		let mut bytes = [0u8; 20];
 		for i in bytes.iter_mut() {

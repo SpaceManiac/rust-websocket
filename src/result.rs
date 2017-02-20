@@ -5,7 +5,7 @@ use std::str::Utf8Error;
 use std::error::Error;
 use std::convert::From;
 use std::fmt;
-use openssl::ssl::error::SslError;
+use openssl::error::ErrorStack as SslError;
 use hyper::Error as HttpError;
 use url::ParseError;
 
