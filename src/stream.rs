@@ -2,6 +2,7 @@
 extern crate net2;
 
 use std::io::{self, Read, Write};
+use std::rc::Rc;
 use self::net2::TcpStreamExt;
 use openssl::ssl::SslStream;
 
@@ -12,14 +13,14 @@ pub enum WebSocketStream {
 	/// A TCP stream.
 	Tcp(TcpStream),
 	/// An SSL-backed TCP Stream
-	Ssl(SslStream<TcpStream>)
+	Ssl(Rc<SslStream<TcpStream>>)
 }
 
 impl Read for WebSocketStream {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
 		match *self {
 		WebSocketStream::Tcp(ref mut inner) => inner.read(buf),
-			WebSocketStream::Ssl(ref mut inner) => inner.read(buf),
+			WebSocketStream::Ssl(ref mut inner) => Rc::get_mut(inner).expect("SSL stream aliased").read(buf),
 		}
 	}
 }
@@ -28,14 +29,14 @@ impl Write for WebSocketStream {
 	fn write(&mut self, msg: &[u8]) -> io::Result<usize> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.write(msg),
-			WebSocketStream::Ssl(ref mut inner) => inner.write(msg),
+			WebSocketStream::Ssl(ref mut inner) => Rc::get_mut(inner).expect("SSL stream aliased").write(msg),
 		}
 	}
 
 	fn flush(&mut self) -> io::Result<()> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.flush(),
-			WebSocketStream::Ssl(ref mut inner) => inner.flush(),
+			WebSocketStream::Ssl(ref mut inner) => Rc::get_mut(inner).expect("SSL stream aliased").flush(),
 		}
 	}
 }
@@ -59,28 +60,37 @@ impl WebSocketStream {
 	pub fn set_nodelay(&mut self, nodelay: bool) -> io::Result<()> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => TcpStreamExt::set_nodelay(inner, nodelay),
-			WebSocketStream::Ssl(ref mut inner) => TcpStreamExt::set_nodelay(inner.get_mut(), nodelay),
+			WebSocketStream::Ssl(ref mut inner) => {
+				let inner = Rc::get_mut(inner).expect("SSL stream aliased");
+				TcpStreamExt::set_nodelay(inner.get_mut(), nodelay)
+			},
 		}
 	}
 	/// See `TcpStream.set_keepalive()`.
 	pub fn set_keepalive(&mut self, delay_in_ms: Option<u32>) -> io::Result<()> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => TcpStreamExt::set_keepalive_ms(inner, delay_in_ms),
-			WebSocketStream::Ssl(ref mut inner) => TcpStreamExt::set_keepalive_ms(inner.get_mut(), delay_in_ms),
+			WebSocketStream::Ssl(ref mut inner) => {
+				let inner = Rc::get_mut(inner).expect("SSL stream aliased");
+				TcpStreamExt::set_keepalive_ms(inner.get_mut(), delay_in_ms)
+			},
 		}
 	}
 	/// See `TcpStream.shutdown()`.
 	pub fn shutdown(&mut self, shutdown: Shutdown) -> io::Result<()> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.shutdown(shutdown),
-			WebSocketStream::Ssl(ref mut inner) => inner.get_mut().shutdown(shutdown),
+			WebSocketStream::Ssl(ref mut inner) => {
+				let inner = Rc::get_mut(inner).expect("SSL stream aliased");
+				inner.get_mut().shutdown(shutdown)
+			},
 		}
 	}
 	/// See `TcpStream.try_clone()`.
 	pub fn try_clone(&self) -> io::Result<WebSocketStream> {
 		Ok(match *self {
 			WebSocketStream::Tcp(ref inner) => WebSocketStream::Tcp(try!(inner.try_clone())),
-			WebSocketStream::Ssl(_) => panic!("Cannot clone ssl stream"),
+			WebSocketStream::Ssl(ref rc) => WebSocketStream::Ssl(rc.clone()),
 		})
 	}
 

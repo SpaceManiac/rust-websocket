@@ -2,6 +2,7 @@
 
 use std::net::TcpStream;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::io::Result as IoResult;
 
 use ws;
@@ -88,7 +89,7 @@ impl Client<DataFrame, Sender<WebSocketStream>, Receiver<WebSocketStream>> {
 		let stream = if secure {
 			let ssl = try!(Ssl::new(context));
 			let sslstream = ssl.connect(connection).unwrap();
-			WebSocketStream::Ssl(sslstream)
+			WebSocketStream::Ssl(Rc::new(sslstream))
 		}
 		else {
 			WebSocketStream::Tcp(connection)

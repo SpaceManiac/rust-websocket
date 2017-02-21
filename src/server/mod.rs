@@ -1,6 +1,7 @@
 //! Provides an implementation of a WebSocket server
 use std::net::{SocketAddr, ToSocketAddrs, TcpListener};
 use std::net::Shutdown;
+use std::rc::Rc;
 use std::io::{Read, Write};
 use std::io;
 pub use self::request::Request;
@@ -121,7 +122,7 @@ impl<'a> Server<'a> {
 						return Err(io::Error::new(io::ErrorKind::Other, err));
 					}
 				};
-				WebSocketStream::Ssl(sslstream)
+				WebSocketStream::Ssl(Rc::new(sslstream))
 			}
 			None => { WebSocketStream::Tcp(stream) }
 		};
