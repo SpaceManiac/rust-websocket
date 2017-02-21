@@ -2,7 +2,7 @@
 extern crate net2;
 
 use std::io::{self, Read, Write};
-use std::rc::Rc;
+use std::sync::Arc;
 use self::net2::TcpStreamExt;
 use openssl::ssl::SslStream;
 
@@ -13,14 +13,14 @@ pub enum WebSocketStream {
 	/// A TCP stream.
 	Tcp(TcpStream),
 	/// An SSL-backed TCP Stream
-	Ssl(Rc<SslStream<TcpStream>>)
+	Ssl(Arc<SslStream<TcpStream>>)
 }
 
 impl Read for WebSocketStream {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
 		match *self {
 		WebSocketStream::Tcp(ref mut inner) => inner.read(buf),
-			WebSocketStream::Ssl(ref mut inner) => Rc::get_mut(inner).expect("SSL stream aliased").read(buf),
+			WebSocketStream::Ssl(ref mut inner) => Arc::get_mut(inner).expect("SSL stream aliased").read(buf),
 		}
 	}
 }
@@ -29,14 +29,14 @@ impl Write for WebSocketStream {
 	fn write(&mut self, msg: &[u8]) -> io::Result<usize> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.write(msg),
-			WebSocketStream::Ssl(ref mut inner) => Rc::get_mut(inner).expect("SSL stream aliased").write(msg),
+			WebSocketStream::Ssl(ref mut inner) => Arc::get_mut(inner).expect("SSL stream aliased").write(msg),
 		}
 	}
 
 	fn flush(&mut self) -> io::Result<()> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.flush(),
-			WebSocketStream::Ssl(ref mut inner) => Rc::get_mut(inner).expect("SSL stream aliased").flush(),
+			WebSocketStream::Ssl(ref mut inner) => Arc::get_mut(inner).expect("SSL stream aliased").flush(),
 		}
 	}
 }
@@ -61,7 +61,7 @@ impl WebSocketStream {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => TcpStreamExt::set_nodelay(inner, nodelay),
 			WebSocketStream::Ssl(ref mut inner) => {
-				let inner = Rc::get_mut(inner).expect("SSL stream aliased");
+				let inner = Arc::get_mut(inner).expect("SSL stream aliased");
 				TcpStreamExt::set_nodelay(inner.get_mut(), nodelay)
 			},
 		}
@@ -71,7 +71,7 @@ impl WebSocketStream {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => TcpStreamExt::set_keepalive_ms(inner, delay_in_ms),
 			WebSocketStream::Ssl(ref mut inner) => {
-				let inner = Rc::get_mut(inner).expect("SSL stream aliased");
+				let inner = Arc::get_mut(inner).expect("SSL stream aliased");
 				TcpStreamExt::set_keepalive_ms(inner.get_mut(), delay_in_ms)
 			},
 		}
@@ -81,7 +81,7 @@ impl WebSocketStream {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.shutdown(shutdown),
 			WebSocketStream::Ssl(ref mut inner) => {
-				let inner = Rc::get_mut(inner).expect("SSL stream aliased");
+				let inner = Arc::get_mut(inner).expect("SSL stream aliased");
 				inner.get_mut().shutdown(shutdown)
 			},
 		}
