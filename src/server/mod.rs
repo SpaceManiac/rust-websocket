@@ -3,7 +3,7 @@ use std::net::{SocketAddr, ToSocketAddrs, TcpListener};
 use std::net::Shutdown;
 use std::io::{Read, Write};
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 pub use self::request::Request;
 pub use self::response::Response;
 
@@ -122,7 +122,7 @@ impl<'a> Server<'a> {
 						return Err(io::Error::new(io::ErrorKind::Other, err));
 					}
 				};
-				WebSocketStream::Ssl(Arc::new(sslstream))
+				WebSocketStream::Ssl(Arc::new(Mutex::new(sslstream)))
 			}
 			None => { WebSocketStream::Tcp(stream) }
 		};

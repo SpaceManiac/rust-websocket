@@ -2,7 +2,7 @@
 extern crate net2;
 
 use std::io::{self, Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use self::net2::TcpStreamExt;
 use openssl::ssl::SslStream;
 
@@ -13,14 +13,14 @@ pub enum WebSocketStream {
 	/// A TCP stream.
 	Tcp(TcpStream),
 	/// An SSL-backed TCP Stream
-	Ssl(Arc<SslStream<TcpStream>>)
+	Ssl(Arc<Mutex<SslStream<TcpStream>>>)
 }
 
 impl Read for WebSocketStream {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
 		match *self {
-		WebSocketStream::Tcp(ref mut inner) => inner.read(buf),
-			WebSocketStream::Ssl(ref mut inner) => Arc::get_mut(inner).expect("SSL stream aliased").read(buf),
+			WebSocketStream::Tcp(ref mut inner) => inner.read(buf),
+			WebSocketStream::Ssl(ref mut inner) => inner.lock().expect("lock").read(buf),
 		}
 	}
 }
@@ -29,14 +29,14 @@ impl Write for WebSocketStream {
 	fn write(&mut self, msg: &[u8]) -> io::Result<usize> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.write(msg),
-			WebSocketStream::Ssl(ref mut inner) => Arc::get_mut(inner).expect("SSL stream aliased").write(msg),
+			WebSocketStream::Ssl(ref mut inner) => inner.lock().expect("lock").write(msg),
 		}
 	}
 
 	fn flush(&mut self) -> io::Result<()> {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.flush(),
-			WebSocketStream::Ssl(ref mut inner) => Arc::get_mut(inner).expect("SSL stream aliased").flush(),
+			WebSocketStream::Ssl(ref mut inner) => inner.lock().expect("lock").flush(),
 		}
 	}
 }
@@ -46,14 +46,14 @@ impl WebSocketStream {
 	pub fn peer_addr(&self) -> io::Result<SocketAddr> {
 		match *self {
 			WebSocketStream::Tcp(ref inner) => inner.peer_addr(),
-			WebSocketStream::Ssl(ref inner) => inner.get_ref().peer_addr(),
+			WebSocketStream::Ssl(ref inner) => inner.lock().expect("lock").get_ref().peer_addr(),
 		}
 	}
 	/// See `TcpStream.local_addr()`.
 	pub fn local_addr(&self) -> io::Result<SocketAddr> {
 		match *self {
 			WebSocketStream::Tcp(ref inner) => inner.local_addr(),
-			WebSocketStream::Ssl(ref inner) => inner.get_ref().local_addr(),
+			WebSocketStream::Ssl(ref inner) => inner.lock().expect("lock").get_ref().local_addr(),
 		}
 	}
 	/// See `TcpStream.set_nodelay()`.
@@ -61,7 +61,7 @@ impl WebSocketStream {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => TcpStreamExt::set_nodelay(inner, nodelay),
 			WebSocketStream::Ssl(ref mut inner) => {
-				let inner = Arc::get_mut(inner).expect("SSL stream aliased");
+				let mut inner = inner.lock().expect("lock");
 				TcpStreamExt::set_nodelay(inner.get_mut(), nodelay)
 			},
 		}
@@ -71,7 +71,7 @@ impl WebSocketStream {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => TcpStreamExt::set_keepalive_ms(inner, delay_in_ms),
 			WebSocketStream::Ssl(ref mut inner) => {
-				let inner = Arc::get_mut(inner).expect("SSL stream aliased");
+				let mut inner = inner.lock().expect("lock");
 				TcpStreamExt::set_keepalive_ms(inner.get_mut(), delay_in_ms)
 			},
 		}
@@ -81,7 +81,7 @@ impl WebSocketStream {
 		match *self {
 			WebSocketStream::Tcp(ref mut inner) => inner.shutdown(shutdown),
 			WebSocketStream::Ssl(ref mut inner) => {
-				let inner = Arc::get_mut(inner).expect("SSL stream aliased");
+				let mut inner = inner.lock().expect("lock");
 				inner.get_mut().shutdown(shutdown)
 			},
 		}
@@ -90,7 +90,7 @@ impl WebSocketStream {
 	pub fn try_clone(&self) -> io::Result<WebSocketStream> {
 		Ok(match *self {
 			WebSocketStream::Tcp(ref inner) => WebSocketStream::Tcp(try!(inner.try_clone())),
-			WebSocketStream::Ssl(ref rc) => WebSocketStream::Ssl(rc.clone()),
+			WebSocketStream::Ssl(ref arc) => WebSocketStream::Ssl(arc.clone()),
 		})
 	}
 
@@ -98,7 +98,7 @@ impl WebSocketStream {
     pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
         match *self {
 			WebSocketStream::Tcp(ref inner) => inner.set_nonblocking(nonblocking),
-			WebSocketStream::Ssl(ref inner) => inner.get_ref().set_nonblocking(nonblocking),
+			WebSocketStream::Ssl(ref inner) => inner.lock().expect("lock").get_ref().set_nonblocking(nonblocking),
         }
     }
 }
