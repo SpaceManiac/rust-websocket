@@ -58,7 +58,7 @@ impl WebSocketAccept {
 		let mut iter = output.into_iter();
 		let mut bytes = [0u8; 20];
 		for i in bytes.iter_mut() {
-			*i = iter.next().unwrap();
+			*i = *iter.next().unwrap();
 		}
 		WebSocketAccept(bytes)
 	}
