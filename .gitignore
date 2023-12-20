@@ -1,6 +1,9 @@
 /target
 /Cargo.lock
 
+# emacs
+*.#*.rs
+
 # Windows image file caches
 Thumbs.db
 ehthumbs.db
@@ -44,3 +47,8 @@ Icon
 .AppleDesktop
 Network Trash Folder
 Temporary Items
+
+# Autobahn Output
+autobahn/client
+autobahn/server
+

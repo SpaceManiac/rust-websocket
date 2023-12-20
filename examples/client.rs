@@ -1,30 +1,26 @@
 extern crate websocket;
 
+use std::io::stdin;
+use std::sync::mpsc::channel;
+use std::thread;
+
+use websocket::client::ClientBuilder;
+use websocket::{Message, OwnedMessage};
+
+const CONNECTION: &'static str = "ws://127.0.0.1:2794";
+
 fn main() {
-	use std::thread;
-	use std::sync::mpsc::channel;
-	use std::io::stdin;
+	println!("Connecting to {}", CONNECTION);
 
-	use websocket::{Message, Sender, Receiver};
-    use websocket::message::Type;
-	use websocket::client::request::Url;
-	use websocket::Client;
-
-	let url = Url::parse("ws://127.0.0.1:2794").unwrap();
-
-	println!("Connecting to {}", url);
-
-	let request = Client::connect(url).unwrap();
-
-	let response = request.send().unwrap(); // Send the request and retrieve a response
-
-	println!("Validating response...");
-
-	response.validate().unwrap(); // Validate the response
+	let client = ClientBuilder::new(CONNECTION)
+		.unwrap()
+		.add_protocol("rust-websocket")
+		.connect_insecure()
+		.unwrap();
 
 	println!("Successfully connected");
 
-	let (mut sender, mut receiver) = response.begin().split();
+	let (mut receiver, mut sender) = client.split().unwrap();
 
 	let (tx, rx) = channel();
 
@@ -33,19 +29,19 @@ fn main() {
 	let send_loop = thread::spawn(move || {
 		loop {
 			// Send loop
-			let message: Message = match rx.recv() {
+			let message = match rx.recv() {
 				Ok(m) => m,
 				Err(e) => {
 					println!("Send Loop: {:?}", e);
 					return;
 				}
 			};
-			match message.opcode {
-				Type::Close => {
+			match message {
+				OwnedMessage::Close(_) => {
 					let _ = sender.send_message(&message);
 					// If it's a close message, just send it and then return.
 					return;
-				},
+				}
 				_ => (),
 			}
 			// Send the message
@@ -63,28 +59,30 @@ fn main() {
 	let receive_loop = thread::spawn(move || {
 		// Receive loop
 		for message in receiver.incoming_messages() {
-			let message: Message = match message {
+			let message = match message {
 				Ok(m) => m,
 				Err(e) => {
 					println!("Receive Loop: {:?}", e);
-					let _ = tx_1.send(Message::close());
+					let _ = tx_1.send(OwnedMessage::Close(None));
 					return;
 				}
 			};
-			match message.opcode {
-				Type::Close => {
+			match message {
+				OwnedMessage::Close(_) => {
 					// Got a close message, so send a close message and return
-					let _ = tx_1.send(Message::close());
+					let _ = tx_1.send(OwnedMessage::Close(None));
 					return;
 				}
-				Type::Ping => match tx_1.send(Message::pong(message.payload)) {
-					// Send a pong in response
-					Ok(()) => (),
-					Err(e) => {
-						println!("Receive Loop: {:?}", e);
-						return;
+				OwnedMessage::Ping(data) => {
+					match tx_1.send(OwnedMessage::Pong(data)) {
+						// Send a pong in response
+						Ok(()) => (),
+						Err(e) => {
+							println!("Receive Loop: {:?}", e);
+							return;
+						}
 					}
-				},
+				}
 				// Say what we received
 				_ => println!("Receive Loop: {:?}", message),
 			}
@@ -101,13 +99,13 @@ fn main() {
 		let message = match trimmed {
 			"/close" => {
 				// Close the connection
-				let _ = tx.send(Message::close());
+				let _ = tx.send(OwnedMessage::Close(None));
 				break;
 			}
 			// Send a ping
-			"/ping" => Message::ping(b"PING".to_vec()),
+			"/ping" => OwnedMessage::Ping(b"PING".to_vec()),
 			// Otherwise, just send text
-			_ => Message::text(trimmed.to_string()),
+			_ => OwnedMessage::Text(trimmed.to_string()),
 		};
 
 		match tx.send(message) {

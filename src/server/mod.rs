@@ -1,169 +1,111 @@
 //! Provides an implementation of a WebSocket server
-use std::net::{SocketAddr, ToSocketAddrs, TcpListener};
-use std::net::Shutdown;
-use std::io::{Read, Write};
-use std::io;
-pub use self::request::Request;
-pub use self::response::Response;
+#[cfg(any(feature = "sync-ssl", feature = "async-ssl"))]
+use native_tls::TlsAcceptor;
 
-use stream::WebSocketStream;
+use self::upgrade::{HyperIntoWsError, Request};
+use crate::stream::Stream;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
-use openssl::ssl::SslContext;
-use openssl::ssl::SslStream;
+pub mod upgrade;
 
-pub mod request;
-pub mod response;
+#[cfg(feature = "async")]
+pub mod r#async;
 
-/// Represents a WebSocket server which can work with either normal (non-secure) connections, or secure WebSocket connections.
+#[cfg(feature = "sync")]
+pub mod sync;
+
+/// Marker struct for a struct not being secure
+#[derive(Clone)]
+pub struct NoTlsAcceptor;
+/// Trait that is implemented over NoSslAcceptor and SslAcceptor that
+/// serves as a generic bound to make a struct with.
+/// Used in the Server to specify impls based on whether the server
+/// is running over SSL or not.
+pub trait OptionalTlsAcceptor {}
+impl OptionalTlsAcceptor for NoTlsAcceptor {}
+#[cfg(any(feature = "sync-ssl", feature = "async-ssl"))]
+impl OptionalTlsAcceptor for TlsAcceptor {}
+
+/// When a sever tries to accept a connection many things can go wrong.
 ///
-/// This is a convenient way to implement WebSocket servers, however it is possible to use any sendable Reader and Writer to obtain
+/// This struct is all the information that is recovered from a failed
+/// websocket handshake, in case one wants to use the connection for something
+/// else (such as HTTP).
+pub struct InvalidConnection<S, B>
+where
+	S: Stream,
+{
+	/// if the stream was successfully setup it will be included here
+	/// on a failed connection.
+	pub stream: Option<S>,
+	/// the parsed request. **This is a normal HTTP request** meaning you can
+	/// simply run this server and handle both HTTP and Websocket connections.
+	/// If you already have a server you want to use, checkout the
+	/// `server::upgrade` module to integrate this crate with your server.
+	pub parsed: Option<Request>,
+	/// the buffered data that was already taken from the stream
+	pub buffer: Option<B>,
+	/// the cause of the failed websocket connection setup
+	pub error: HyperIntoWsError,
+}
+
+impl<S, B> Debug for InvalidConnection<S, B>
+where
+	S: Stream,
+{
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		fmt.debug_struct("InvalidConnection")
+			.field("stream", &String::from("..."))
+			.field("parsed", &String::from("..."))
+			.field("buffer", &String::from("..."))
+			.field("error", &self.error)
+			.finish()
+	}
+}
+
+/// Represents a WebSocket server which can work with either normal
+/// (non-secure) connections, or secure WebSocket connections.
+///
+/// This is a convenient way to implement WebSocket servers, however
+/// it is possible to use any sendable Reader and Writer to obtain
 /// a WebSocketClient, so if needed, an alternative server implementation can be used.
-///#Non-secure Servers
 ///
-/// ```no_run
-///extern crate websocket;
-///# fn main() {
-///use std::thread;
-///use websocket::{Server, Message};
+/// # Synchronous Servers
+/// Synchronous implementations of a websocket server are available below, each method is
+/// documented so the reader knows whether is it synchronous or asynchronous.
 ///
-///let server = Server::bind("127.0.0.1:1234").unwrap();
+/// To use the synchronous implementation, you must have the `sync` feature enabled
+/// (it is enabled by default).
+/// To use the synchronous SSL implementation, you must have the `sync-ssl` feature enabled
+/// (it is enabled by default).
 ///
-///for connection in server {
-///    // Spawn a new thread for each connection.
-///    thread::spawn(move || {
-///		   let request = connection.unwrap().read_request().unwrap(); // Get the request
-///		   let response = request.accept(); // Form a response
-///		   let mut client = response.send().unwrap(); // Send the response
+/// # Asynchronous Servers
+/// Asynchronous implementations of a websocket server are available below, each method is
+/// documented so the reader knows whether is it synchronous or asynchronous.
+/// Simply look out for the implementation of `Server` whose methods only return `Future`s
+/// (it is also written in the docs if the method is async).
 ///
-///		   let message = Message::text("Hello, client!");
-///		   let _ = client.send_message(&message);
+/// To use the asynchronous implementation, you must have the `async` feature enabled
+/// (it is enabled by default).
+/// To use the asynchronous SSL implementation, you must have the `async-ssl` feature enabled
+/// (it is enabled by default).
 ///
-///		   // ...
-///    });
-///}
-/// # }
-/// ```
+/// # A Hyper Server
+/// This crates comes with hyper integration out of the box, you can create a hyper
+/// server and serve websocket and HTTP **on the same port!**
+/// check out the docs over at `websocket::server::upgrade::sync::HyperRequest` for an example.
 ///
-///#Secure Servers
-/// ```no_run
-///extern crate websocket;
-///extern crate openssl;
-///# fn main() {
-///use std::thread;
-///use std::path::Path;
-///use websocket::{Server, Message};
-///use openssl::ssl::{SslContext, SslMethod};
-///use openssl::x509::X509FileType;
-///
-///let mut context = SslContext::new(SslMethod::Tlsv1).unwrap();
-///let _ = context.set_certificate_file(&(Path::new("cert.pem")), X509FileType::PEM);
-///let _ = context.set_private_key_file(&(Path::new("key.pem")), X509FileType::PEM);
-///let server = Server::bind_secure("127.0.0.1:1234", &context).unwrap();
-///
-///for connection in server {
-///    // Spawn a new thread for each connection.
-///    thread::spawn(move || {
-///		   let request = connection.unwrap().read_request().unwrap(); // Get the request
-///		   let response = request.accept(); // Form a response
-///		   let mut client = response.send().unwrap(); // Send the response
-///
-///		   let message = Message::text("Hello, client!");
-///		   let _ = client.send_message(&message);
-///
-///		   // ...
-///    });
-///}
-/// # }
-/// ```
-pub struct Server<'a> {
-	inner: TcpListener,
-	context: Option<&'a SslContext>,
-}
-
-impl<'a> Server<'a> {
-	/// Bind this Server to this socket
-	pub fn bind<T: ToSocketAddrs>(addr: T) -> io::Result<Server<'a>> {
-		Ok(Server {
-			inner: try!(TcpListener::bind(&addr)),
-			context: None,
-		})
-	}
-	/// Bind this Server to this socket, utilising the given SslContext
-	pub fn bind_secure<T: ToSocketAddrs>(addr: T, context: &'a SslContext) -> io::Result<Server<'a>> {
-		Ok(Server {
-			inner: try!(TcpListener::bind(&addr)),
-			context: Some(context),
-		})
-	}
-	/// Get the socket address of this server
-	pub fn local_addr(&self) -> io::Result<SocketAddr> {
-		self.inner.local_addr()
-	}
-
-	/// Create a new independently owned handle to the underlying socket.
-	pub fn try_clone(&self) -> io::Result<Server<'a>> {
-		let inner = try!(self.inner.try_clone());
-		Ok(Server {
-			inner: inner,
-			context: self.context
-		})
-	}
-
-	/// Wait for and accept an incoming WebSocket connection, returning a WebSocketRequest
-	pub fn accept(&mut self) -> io::Result<Connection<WebSocketStream, WebSocketStream>> {
-		let stream = try!(self.inner.accept()).0;
-		let wsstream = match self.context {
-			Some(context) => {
-				let sslstream = match SslStream::accept(context, stream) {
-					Ok(s) => s,
-					Err(err) => {
-						return Err(io::Error::new(io::ErrorKind::Other, err));
-					}
-				};
-				WebSocketStream::Ssl(sslstream)
-			}
-			None => { WebSocketStream::Tcp(stream) }
-		};
-		Ok(Connection(try!(wsstream.try_clone()), try!(wsstream.try_clone())))
-	}
-
-    /// Changes whether the Server is in nonblocking mode.
-    ///
-    /// If it is in nonblocking mode, accept() will return an error instead of blocking when there
-    /// are no incoming connections.
-    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
-        self.inner.set_nonblocking(nonblocking)
-    }
-}
-
-impl<'a> Iterator for Server<'a> {
-	type Item = io::Result<Connection<WebSocketStream, WebSocketStream>>;
-
-	fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-		Some(self.accept())
-	}
-}
-
-/// Represents a connection to the server that has not been processed yet.
-pub struct Connection<R: Read, W: Write>(R, W);
-
-impl<R: Read, W: Write> Connection<R, W> {
-	/// Process this connection and read the request.
-	pub fn read_request(self) -> io::Result<Request<R, W>> {
-		match Request::read(self.0, self.1) {
-			Ok(result) => { Ok(result) },
-			Err(err) => {
-				Err(io::Error::new(io::ErrorKind::InvalidInput, err))
-			}
-		}
-	}
-}
-
-impl Connection<WebSocketStream, WebSocketStream> {
-    /// Shuts down the currennt connection in the specified way.
-    /// All future IO calls to this connection will return immediately with an appropriate
-    /// return value.
-    pub fn shutdown(&mut self, how: Shutdown) -> io::Result<()> {
-        self.0.shutdown(how)
-    }
+/// # A Custom Server
+/// So you don't want to use any of our server implementations? That's O.K.
+/// All it takes is implementing the `IntoWs` trait for your server's streams,
+/// then calling `.into_ws()` on them.
+/// check out the docs over at `websocket::server::upgrade::sync` for more.
+#[cfg(any(feature = "sync", feature = "async"))]
+pub struct WsServer<S, L>
+where
+	S: OptionalTlsAcceptor,
+{
+	listener: L,
+	/// The SSL acceptor given to the server
+	pub ssl_acceptor: S,
 }
